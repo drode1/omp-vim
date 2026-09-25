@@ -92,7 +92,16 @@ Default-equivalent `settings.json`:
       "normal": "borderAccent",
       "ex": "warning"
     },
-    "syncBorderColorWithMode": false,
+    "syncBorderColorWithMode": false
+  }
+}
+```
+
+Optional insert-escape example (feature is off unless set):
+
+```json
+{
+  "ompVim": {
     "escapeSequence": ["jk", "jj"],
     "escapeSequenceTimeoutMs": 300
   }

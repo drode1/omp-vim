@@ -1706,9 +1706,7 @@ export class ModalEditor extends CustomEditor {
 
   private completeEscapeSequence(): void {
     this.removeEscapeSequencePendingChar();
-    this.clearUnderlyingPasteStateIfActive();
-    this.setMode("normal");
-    if (this.getCursor().col > 0) this.moveCursorBy(-1);
+    this.handleEscape();
   }
 
   /** Returns true when the key was fully handled (including no-op consume). */
