@@ -27,6 +27,7 @@ import {
   type WordMotionClass,
 } from "./motions.js";
 import {
+  DEFAULT_ESCAPE_SEQUENCE_TIMEOUT_MS,
   type ModeChangeSettings,
   type ModeColorSettings,
   readPiVimSettings,
@@ -167,6 +168,14 @@ type ModeColorizers = Record<ModeColorKey, (s: string) => string>;
 type ModalEditorOptions = {
   labelColorizers?: ModeColorizers | null;
   borderColorizers?: ModeColorizers | null;
+  escapeSequence?: string[];
+  escapeSequenceTimeoutMs?: number;
+};
+
+type EscapeSequencePending = {
+  char: string;
+  abs: number;
+  timer: ReturnType<typeof setTimeout>;
 };
 type ThemeLike = { fg(token: string, text: string): string };
 
@@ -541,6 +550,10 @@ export class ModalEditor extends CustomEditor {
   private quitFn: () => void = () => {};
   private notifyFn: (message: string) => void = () => {};
   private modeChangeFn: (mode: Mode, prevMode: Mode) => void = () => {};
+  private escapeSequences: string[] = [];
+  private escapeSequenceTimeoutMs = DEFAULT_ESCAPE_SEQUENCE_TIMEOUT_MS;
+  private escapeSecondsByFirst = new Map<string, Set<string>>();
+  private escapePending: EscapeSequencePending | null = null;
 
   constructor(
     tui: unknown,
@@ -552,6 +565,10 @@ export class ModalEditor extends CustomEditor {
     this.cursorShapeRuntime = getCursorShapeRuntime(tui);
     this.labelColorizers = opts?.labelColorizers ?? null;
     this.borderColorizers = opts?.borderColorizers ?? null;
+    this.setEscapeSequenceConfig(
+      opts?.escapeSequence ?? [],
+      opts?.escapeSequenceTimeoutMs ?? DEFAULT_ESCAPE_SEQUENCE_TIMEOUT_MS,
+    );
     this.installModeBorderColorizer();
   }
 
@@ -582,6 +599,31 @@ export class ModalEditor extends CustomEditor {
   }
   setModeChangeFn(fn: (mode: Mode, prevMode: Mode) => void): void {
     this.modeChangeFn = fn;
+  }
+  setEscapeSequenceConfig(
+    sequences: string[] | undefined,
+    timeoutMs: number | undefined = DEFAULT_ESCAPE_SEQUENCE_TIMEOUT_MS,
+  ): void {
+    this.clearEscapeSequencePending();
+    const cleaned = (sequences ?? []).filter(
+      (s) => typeof s === "string" && /^[A-Za-z]{2}$/.test(s),
+    );
+    this.escapeSequences = [...new Set(cleaned)];
+    this.escapeSequenceTimeoutMs =
+      typeof timeoutMs === "number" && Number.isFinite(timeoutMs)
+        ? Math.min(2000, Math.max(50, Math.trunc(timeoutMs)))
+        : DEFAULT_ESCAPE_SEQUENCE_TIMEOUT_MS;
+    this.escapeSecondsByFirst = new Map();
+    for (const seq of this.escapeSequences) {
+      const first = seq[0]!;
+      const second = seq[1]!;
+      let set = this.escapeSecondsByFirst.get(first);
+      if (!set) {
+        set = new Set();
+        this.escapeSecondsByFirst.set(first, set);
+      }
+      set.add(second);
+    }
   }
   getRegister(): string {
     return this.unnamedRegister;
@@ -629,6 +671,9 @@ export class ModalEditor extends CustomEditor {
     ) {
       this.undoStack.push(this.captureSnapshot());
       this.clearRedoStack();
+    }
+    if (prev === "insert" && mode !== "insert") {
+      this.clearEscapeSequencePending();
     }
     this.mode = mode;
     if (prev !== mode) {
@@ -925,19 +970,26 @@ export class ModalEditor extends CustomEditor {
 
     if ("insert" === this.mode) {
       if (matchesKey(data, Key.shiftAlt("a")) || data === "\x1bA") {
+        this.clearEscapeSequencePending();
         super.handleInput(CTRL_E);
         return;
       }
       if (matchesKey(data, Key.shiftAlt("i")) || data === "\x1bI") {
+        this.clearEscapeSequencePending();
         super.handleInput(CTRL_A);
         return;
       }
       if (matchesKey(data, Key.alt("o")) || data === "\x1bo") {
+        this.clearEscapeSequencePending();
         this.openLineBelow();
         return;
       }
       if (matchesKey(data, Key.shiftAlt("o")) || data === "\x1bO") {
+        this.clearEscapeSequencePending();
         this.openLineAbove();
+        return;
+      }
+      if (this.tryHandleInsertEscapeSequence(data)) {
         return;
       }
       const printableInsertion = this.isPrintableChunk(data);
@@ -1043,6 +1095,7 @@ export class ModalEditor extends CustomEditor {
   }
 
   private handleEscape(): void {
+    this.clearEscapeSequencePending();
     if (this.pendingExCommand !== null) {
       this.clearPendingExCommand();
       return;
@@ -1612,6 +1665,78 @@ export class ModalEditor extends CustomEditor {
     if (command) {
       this.notifyFn(`Unsupported ex command: :${command}`);
     }
+  }
+
+  private isAsciiLetterInput(data: string): boolean {
+    return data.length === 1 && /^[A-Za-z]$/.test(data);
+  }
+
+  private clearEscapeSequencePending(): void {
+    if (!this.escapePending) return;
+    clearTimeout(this.escapePending.timer);
+    this.escapePending = null;
+  }
+
+  private startEscapeSequencePending(char: string, abs: number): void {
+    this.clearEscapeSequencePending();
+    const timer = setTimeout(() => {
+      if (this.escapePending?.timer === timer) {
+        this.escapePending = null;
+      }
+    }, this.escapeSequenceTimeoutMs);
+    timer.unref?.();
+    this.escapePending = { char, abs, timer };
+  }
+
+  private removeEscapeSequencePendingChar(): boolean {
+    const pending = this.escapePending;
+    if (!pending) return false;
+    const text = this.getText();
+    if (text[pending.abs] !== pending.char) {
+      this.clearEscapeSequencePending();
+      return false;
+    }
+    this.clearEscapeSequencePending();
+    this.replaceTextInBuffer(
+      text.slice(0, pending.abs) + text.slice(pending.abs + 1),
+      pending.abs,
+    );
+    return true;
+  }
+
+  private completeEscapeSequence(): void {
+    this.removeEscapeSequencePendingChar();
+    this.clearUnderlyingPasteStateIfActive();
+    this.setMode("normal");
+    if (this.getCursor().col > 0) this.moveCursorBy(-1);
+  }
+
+  /** Returns true when the key was fully handled (including no-op consume). */
+  private tryHandleInsertEscapeSequence(data: string): boolean {
+    if (this.escapeSecondsByFirst.size === 0) return false;
+
+    if (this.escapePending) {
+      if (this.isAsciiLetterInput(data)) {
+        const seconds = this.escapeSecondsByFirst.get(this.escapePending.char);
+        if (seconds?.has(data)) {
+          this.completeEscapeSequence();
+          return true;
+        }
+      }
+      // Non-matching / non-eligible second key: keep first letter, continue.
+      this.clearEscapeSequencePending();
+      return false;
+    }
+
+    if (!this.isAsciiLetterInput(data)) return false;
+    if (!this.escapeSecondsByFirst.has(data)) return false;
+
+    const printableInsertion = this.isPrintableChunk(data);
+    super.handleInput(data);
+    if (printableInsertion) this.wrapAfterInsertion(/\s$/.test(data));
+    const abs = this.getAbsoluteIndexFromCursor() - data.length;
+    this.startEscapeSequencePending(data, Math.max(0, abs));
+    return true;
   }
 
   private isPrintableChunk(data: string): boolean {
@@ -4268,6 +4393,8 @@ export default function (pi: ExtensionAPI) {
       const editor = new ModalEditor(tui, theme, kb, {
         labelColorizers,
         borderColorizers,
+        escapeSequence: piVimSettings.escapeSequence,
+        escapeSequenceTimeoutMs: piVimSettings.escapeSequenceTimeoutMs,
       });
       editor.setClipboardMirrorPolicy(clipboardMirrorPolicy.policy);
       editor.setQuitFn(() => ctx.shutdown());

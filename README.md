@@ -92,7 +92,9 @@ Default-equivalent `settings.json`:
       "normal": "borderAccent",
       "ex": "warning"
     },
-    "syncBorderColorWithMode": false
+    "syncBorderColorWithMode": false,
+    "escapeSequence": ["jk", "jj"],
+    "escapeSequenceTimeoutMs": 300
   }
 }
 ```
@@ -102,6 +104,10 @@ All keys are optional; omitting `ompVim` is equivalent. Project overrides global
 `clipboardMirror`: `all` mirrors unnamed writes; `yank` mirrors yanks; `never` keeps writes internal. Non-mirrored writes stay local for `p` / `P`.
 
 `syncBorderColorWithMode`: `false` keeps the thinking border; `true` follows mode colors.
+
+`escapeSequence`: optional two-letter Insert→Normal sequences such as `"jk"` or `["jk", "jj"]`. Each entry must be exactly two ASCII letters. Omitted, `null`, `""`, or `[]` leaves only `Esc` / `Ctrl+[`. Inspired by [opencode-vim's `vim_escape_sequence`](https://github.com/leohenon/opencode-vim/pull/190).
+
+`escapeSequenceTimeoutMs`: how long to wait for the second key after a configured first letter (default `300`, clamped to `50..2000`).
 
 `modeChange`: user-global shell command to run on every transition into the named mode. Both keys are optional. The command runs asynchronously via the system shell, stdio is discarded, failures are silenced, and a hung command is timed out so editing never blocks or breaks. If mode changes happen while a hook command is still running, omp-vim keeps only the latest pending command. Hooks fire only on actual transitions: not on the initial mode, not on EX entry/exit (EX is a sub-state of normal), and not on no-op `Esc` from normal. Because this is arbitrary shell, project `.omp/settings.json` values are ignored. omp-vim also emits `omp-vim:mode-change` on `pi.events` with `{ mode, previousMode }` for other extensions. Typical use is IME auto-switching via the third-party [`im-select`](https://github.com/daipeihust/im-select) CLI (cross-platform: macOS / Windows / Linux). Install per its README, then run `im-select` with no args to print your current IME id and plug those ids into the global config:
 
@@ -206,6 +212,7 @@ Use pi-vim for Vim muscle-memory in Pi prompts. Skip it if you need full Vim par
 | key | action |
 |---|---|
 | `Esc` / `Ctrl+[` | Insert → Normal mode |
+| configured `escapeSequence` (e.g. `jk` / `jj`) | Insert → Normal mode (optional; removes the pending first letter) |
 | `Esc` / `Ctrl+[` | Normal mode → pass to Pi (aborts the agent under default Pi keybindings) |
 | `:` | Normal → EX mini-mode |
 | `i` | Normal → Insert at cursor |

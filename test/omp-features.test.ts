@@ -508,3 +508,92 @@ test("second reflow during hard-split typing keeps adjacency (X then Y)", () => 
     assert.ok(visibleWidth(l) <= 54, JSON.stringify(ed.getLines()));
   }
 });
+
+
+// --- insert escape sequences (jk / jj) ---
+
+function makeEditorWithEscape(
+  sequences: string[],
+  timeoutMs = 300,
+) {
+  const ed = new ModalEditor(undefined, getEditorTheme(), undefined, {
+    escapeSequence: sequences,
+    escapeSequenceTimeoutMs: timeoutMs,
+  });
+  const notes: string[] = [];
+  ed.setNotifyFn((m: string) => notes.push(m));
+  const keys = (s: string) => {
+    for (const c of s) ed.handleInput(c);
+  };
+  return { ed, notes, keys };
+}
+
+test("jk exits insert and removes the typed j", () => {
+  const { ed, keys } = makeEditorWithEscape(["jk"]);
+  keys("hellojk");
+  assert.equal(ed.getMode(), "normal");
+  assert.equal(ed.getText(), "hello");
+});
+
+test("jj exits insert and removes the typed j when configured", () => {
+  const { ed, keys } = makeEditorWithEscape(["jk", "jj"]);
+  keys("abjj");
+  assert.equal(ed.getMode(), "normal");
+  assert.equal(ed.getText(), "ab");
+});
+
+test("both jk and jj work when configured together", () => {
+  const a = makeEditorWithEscape(["jk", "jj"]);
+  a.keys("xjk");
+  assert.equal(a.ed.getMode(), "normal");
+  assert.equal(a.ed.getText(), "x");
+
+  const b = makeEditorWithEscape(["jk", "jj"]);
+  b.keys("yjj");
+  assert.equal(b.ed.getMode(), "normal");
+  assert.equal(b.ed.getText(), "y");
+});
+
+test("jx stays in insert and keeps both chars", () => {
+  const { ed, keys } = makeEditorWithEscape(["jk"]);
+  keys("jx");
+  assert.equal(ed.getMode(), "insert");
+  assert.equal(ed.getText(), "jx");
+});
+
+test("j then timeout stays as normal input", async () => {
+  const { ed, keys } = makeEditorWithEscape(["jk"], 50);
+  keys("j");
+  await new Promise((r) => setTimeout(r, 80));
+  assert.equal(ed.getMode(), "insert");
+  assert.equal(ed.getText(), "j");
+  keys("k");
+  assert.equal(ed.getMode(), "insert");
+  assert.equal(ed.getText(), "jk");
+});
+
+test("j then Esc enters normal and leaves exactly one j", () => {
+  const { ed, keys } = makeEditorWithEscape(["jk"]);
+  keys("j");
+  keys(ESC);
+  assert.equal(ed.getMode(), "normal");
+  assert.equal(ed.getText(), "j");
+});
+
+test("unset escapeSequence keeps jk as text in insert", () => {
+  const { ed, keys } = makeEditor();
+  keys("jk");
+  assert.equal(ed.getMode(), "insert");
+  assert.equal(ed.getText(), "jk");
+});
+
+test("modified insert shortcut clears pending escape sequence", () => {
+  const { ed, keys } = makeEditorWithEscape(["jk"]);
+  keys("helloj");
+  // Shift+Alt+A -> go to end of line; clears pending, stays insert
+  ed.handleInput("\x1bA");
+  assert.equal(ed.getMode(), "insert");
+  keys("k");
+  assert.equal(ed.getMode(), "insert");
+  assert.equal(ed.getText(), "hellojk");
+});

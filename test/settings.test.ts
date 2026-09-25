@@ -2,8 +2,13 @@ import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 
 import {
+  DEFAULT_ESCAPE_SEQUENCE_TIMEOUT_MS,
+  normalizeEscapeSequenceTimeoutMs,
+  normalizeEscapeSequences,
   readPiVimBooleanSetting,
   readPiVimClipboardMirrorSetting,
+  readPiVimEscapeSequence,
+  readPiVimEscapeSequenceTimeoutMs,
   readPiVimModeChange,
   readPiVimModeColors,
 } from "../settings.js";
@@ -353,6 +358,48 @@ describe("piVim clipboard mirror settings reader", () => {
         { piVim: "bad" },
       ),
       "bad",
+    );
+  });
+});
+
+
+describe("escapeSequence settings", () => {
+  it("normalizes string and array sequences and drops invalids", () => {
+    assert.deepEqual(normalizeEscapeSequences("jk"), ["jk"]);
+    assert.deepEqual(normalizeEscapeSequences(["jk", "jj", "jk"]), ["jk", "jj"]);
+    assert.deepEqual(normalizeEscapeSequences(["j", "jkk", "1k", 42, null]), []);
+    assert.deepEqual(normalizeEscapeSequences(null), []);
+    assert.deepEqual(normalizeEscapeSequences(""), []);
+  });
+
+  it("reads project override including explicit disable", () => {
+    assert.deepEqual(
+      readPiVimEscapeSequence(
+        { ompVim: { escapeSequence: ["jk"] } },
+        { ompVim: { escapeSequence: null } },
+      ),
+      [],
+    );
+    assert.deepEqual(
+      readPiVimEscapeSequence(
+        { piVim: { escapeSequence: "jk" } },
+        { ompVim: { escapeSequence: ["jj"] } },
+      ),
+      ["jj"],
+    );
+  });
+
+  it("clamps timeout and defaults invalid values", () => {
+    assert.equal(normalizeEscapeSequenceTimeoutMs(undefined), DEFAULT_ESCAPE_SEQUENCE_TIMEOUT_MS);
+    assert.equal(normalizeEscapeSequenceTimeoutMs(10), 50);
+    assert.equal(normalizeEscapeSequenceTimeoutMs(5000), 2000);
+    assert.equal(normalizeEscapeSequenceTimeoutMs(250.9), 250);
+    assert.equal(
+      readPiVimEscapeSequenceTimeoutMs(
+        { ompVim: { escapeSequenceTimeoutMs: 120 } },
+        { ompVim: { escapeSequenceTimeoutMs: "nope" } },
+      ),
+      DEFAULT_ESCAPE_SEQUENCE_TIMEOUT_MS,
     );
   });
 });

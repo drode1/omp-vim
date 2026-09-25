@@ -18,12 +18,21 @@ export type PiVimSettings = {
   modeColors?: ModeColorSettings;
   modeChange?: ModeChangeSettings;
   syncBorderColorWithMode?: boolean;
+  /** Normalized two-letter sequences; empty disables the feature. */
+  escapeSequence?: string[];
+  /** Clamped timeout in ms; always present when settings are loaded from disk. */
+  escapeSequenceTimeoutMs?: number;
 };
+
+export const DEFAULT_ESCAPE_SEQUENCE_TIMEOUT_MS = 300;
+export const MIN_ESCAPE_SEQUENCE_TIMEOUT_MS = 50;
+export const MAX_ESCAPE_SEQUENCE_TIMEOUT_MS = 2000;
 
 const M = Symbol(),
   C = ["insert", "normal", "ex"] as const,
   MC = ["insert", "normal"] as const,
   T = /^[A-Za-z][A-Za-z0-9_-]{0,63}$/;
+const SEQUENCE = /^[A-Za-z]{2}$/;
 const rec = (v: unknown): v is Record<string, unknown> =>
   typeof v === "object" && v !== null && !Array.isArray(v);
 
@@ -57,6 +66,33 @@ function modeChange(v: unknown): ModeChangeSettings | undefined {
     if (t.length > 0) r[k] = t;
   }
   return Object.keys(r)[0] ? r : undefined;
+}
+
+/** Normalize config into unique valid two-letter sequences; invalid entries dropped. */
+export function normalizeEscapeSequences(v: unknown): string[] {
+  if (v === null || v === undefined) return [];
+  const raw = typeof v === "string" ? [v] : Array.isArray(v) ? v : null;
+  if (!raw) return [];
+  const out: string[] = [];
+  const seen = new Set<string>();
+  for (const item of raw) {
+    if (typeof item !== "string") continue;
+    if (!SEQUENCE.test(item)) continue;
+    if (seen.has(item)) continue;
+    seen.add(item);
+    out.push(item);
+  }
+  return out;
+}
+
+export function normalizeEscapeSequenceTimeoutMs(v: unknown): number {
+  if (typeof v !== "number" || !Number.isFinite(v)) {
+    return DEFAULT_ESCAPE_SEQUENCE_TIMEOUT_MS;
+  }
+  return Math.min(
+    MAX_ESCAPE_SEQUENCE_TIMEOUT_MS,
+    Math.max(MIN_ESCAPE_SEQUENCE_TIMEOUT_MS, Math.trunc(v)),
+  );
 }
 
 export function readPiVimClipboardMirrorSetting(g: unknown, p: unknown) {
@@ -97,6 +133,25 @@ export function readPiVimBooleanSetting(
   return typeof w === "boolean" ? w : undefined;
 }
 
+export function readPiVimEscapeSequence(g: unknown, p: unknown): string[] {
+  const v = get(p, "escapeSequence");
+  if (v !== M) return normalizeEscapeSequences(v);
+  const w = get(g, "escapeSequence");
+  if (w !== M) return normalizeEscapeSequences(w);
+  return [];
+}
+
+export function readPiVimEscapeSequenceTimeoutMs(
+  g: unknown,
+  p: unknown,
+): number {
+  const v = get(p, "escapeSequenceTimeoutMs");
+  if (v !== M) return normalizeEscapeSequenceTimeoutMs(v);
+  const w = get(g, "escapeSequenceTimeoutMs");
+  if (w !== M) return normalizeEscapeSequenceTimeoutMs(w);
+  return DEFAULT_ESCAPE_SEQUENCE_TIMEOUT_MS;
+}
+
 function loadSettingsFile(path: string): unknown {
   try {
     if (!existsSync(path)) return undefined;
@@ -118,6 +173,8 @@ function disk(cwd: string): PiVimSettings {
       p,
       "syncBorderColorWithMode",
     ),
+    escapeSequence: readPiVimEscapeSequence(g, p),
+    escapeSequenceTimeoutMs: readPiVimEscapeSequenceTimeoutMs(g, p),
   };
 }
 
